@@ -2,14 +2,15 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>V4</title>
+<title>v5</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
 *{box-sizing:border-box;font-family:system-ui}
 #urlInput{width:740px;padding:8px;font-size:14px}
 .range-row{margin:10px 0}
-#info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:240px;overflow:auto}
+#keyInfo{background:#e8f4fd;padding:12px;margin:10px 0;border-left:4px solid #2196f3;white-space:pre-line}
+#info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:200px;overflow:auto}
 button{padding:8px 14px;margin:0 4px;cursor:pointer}
 input[type="number"]{width:80px;padding:6px}
 video{margin-top:10px;width:920px}
@@ -20,6 +21,7 @@ video{margin-top:10px;width:920px}
   <input id="urlInput" placeholder="粘贴m3u8地址">
   <button id="parseBtn">解析M3U8</button>
 </div>
+<div id="keyInfo">等待解析 KEY / IV 信息...</div>
 <div class="range-row">
   <span>分片区间：</span>
   <input id="startSn" type="number" min="1" placeholder="起始分片">
@@ -28,7 +30,7 @@ video{margin-top:10px;width:920px}
   <button id="downloadRangeBtn" disabled>下载区间分片</button>
   <button id="downloadAllBtn" disabled>下载全部分片</button>
 </div>
-<div id="info">等待解析...</div>
+<div id="info">等待解析分片列表...</div>
 <video id="video" controls></video>
 
 <script>
@@ -38,6 +40,7 @@ const downloadAllBtn = document.getElementById('downloadAllBtn');
 const downloadRangeBtn = document.getElementById('downloadRangeBtn');
 const startSnInput = document.getElementById('startSn');
 const endSnInput = document.getElementById('endSn');
+const keyInfoDom = document.getElementById('keyInfo');
 const infoDom = document.getElementById('info');
 const video = document.getElementById('video');
 
@@ -53,80 +56,87 @@ function destroyHls(){
   fragmentList = [];
   downloadAllBtn.disabled = true;
   downloadRangeBtn.disabled = true;
-  infoDom.innerText = "等待解析...";
 }
 
-parseBtn.onclick = ()=>{
+// ========== 核心：手动解析 m3u8 文本，提取 KEY 和 IV ==========
+function parseKeyFromM3u8(text){
+  // 匹配 #EXT-X-KEY 整行，提取 METHOD、URI、IV
+  const reg = /#EXT-X-KEY:METHOD=([^,]+),URI="([^"]+)"(?:,IV=([^\s\r\n]+))?/;
+  const match = text.match(reg);
+  if(!match) return null;
+  return {
+    method: match[1],
+    keyUri: match[2],
+    ivHex: match[3] ? match[3].replace('0x','') : '' // 去掉0x前缀
+  };
+}
+
+parseBtn.onclick = async ()=>{
   const m3u8Url = urlInput.value.trim();
   if(!m3u8Url){
-    infoDom.innerText = "请输入m3u8地址";
+    keyInfoDom.innerText = "请输入m3u8地址";
     return;
   }
   destroyHls();
-  infoDom.innerText = "正在加载解析m3u8...";
+  keyInfoDom.innerText = "正在请求m3u8原始文本...";
+  infoDom.innerText = "等待解析分片列表...";
 
-  hls = new Hls({
-    xhrSetup: (xhr) => { xhr.withCredentials = false; },
-    maxBufferLength: 30,
-  });
+  try {
+    // 1. 先手动拉取 m3u8 纯文本
+    const resp = await fetch(m3u8Url);
+    if(!resp.ok) throw new Error("请求失败："+resp.status);
+    const m3u8Text = await resp.text();
 
-  hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
-  const level = hls.levels[data.level];
-  const details = level.details;
-  fragmentList = details.fragments;
-  const total = fragmentList.length;
+    // 2. 从文本里解析 KEY 和 IV
+    const keyInfo = parseKeyFromM3u8(m3u8Text);
+    if(keyInfo){
+      keyInfoDom.innerText = 
+`✅ 从 #EXT-X-KEY 行解析成功
+加密方式：${keyInfo.method}
+密钥地址：${keyInfo.keyUri}
+IV(十六进制)：${keyInfo.ivHex || '未指定（默认用分片SN）'}`;
+      console.log("手动解析KEY信息：", keyInfo);
+    }else{
+      keyInfoDom.innerText = "⚠️ 未解析到 #EXT-X-KEY，该m3u8无加密";
+    }
 
-  let text = `✅ 分片总数：${total}\n`;
-  fragmentList.forEach((frag, idx) => {
-    const seq = idx + 1;
-    text += `[${seq}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
-  });
-  infoDom.innerText = text;
-  downloadAllBtn.disabled = false;
-  downloadRangeBtn.disabled = false;
+    // 3. 初始化 hls.js 加载播放（它内部也会读同一行KEY自动解密）
+    hls = new Hls({
+      xhrSetup: (xhr) => { xhr.withCredentials = false; },
+      maxBufferLength: 30,
+    });
 
-  // ========== 兼容全局密钥的加密信息读取 ==========
-  let encryptInfo = null;
-  // 优先从 details.decryptdata 取（全局密钥标准位置）
-  if (details.decryptdata) {
-    encryptInfo = details.decryptdata;
+    hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
+      const level = hls.levels[data.level];
+      const details = level.details;
+      fragmentList = details.fragments;
+      const total = fragmentList.length;
+
+      let text = `✅ 分片总数：${total}\n`;
+      fragmentList.forEach((frag, idx) => {
+        const seq = idx + 1;
+        text += `[${seq}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
+      });
+      infoDom.innerText = text;
+      downloadAllBtn.disabled = false;
+      downloadRangeBtn.disabled = false;
+    });
+
+    hls.on(Hls.Events.ERROR, (ev, data) => {
+      console.error("HLS错误", data);
+      infoDom.innerText += "\n❌ 加载失败，排查：CORS跨域 / auth_key过期 / 密钥不是16字节二进制";
+    });
+
+    hls.loadSource(m3u8Url);
+    hls.attachMedia(video);
+
+  } catch (err) {
+    keyInfoDom.innerText = "❌ 获取m3u8失败："+ err.message +"\n大概率是跨域CORS未配置，请在资源服务器添加CORS响应头";
+    console.error(err);
   }
-  // 兜底：如果 details 没有，尝试从 level 上取
-  else if (level.decryptdata) {
-    encryptInfo = level.decryptdata;
-  }
-  // 再兜底：取第一个分片的 key（分片独立密钥格式）
-  else if (fragmentList[0]?.key) {
-    encryptInfo = fragmentList[0].key;
-  }
-
-  if (encryptInfo) {
-    const ivHex = Array.from(encryptInfo.iv).map(b => b.toString(16).padStart(2, '0')).join('');
-    console.log("===== 加密信息 =====");
-    console.log("加密方式:", encryptInfo.method);
-    console.log("密钥地址:", encryptInfo.uri);
-    console.log("IV(十六进制):", ivHex);
-    infoDom.innerText += `\n✅ 已识别AES-128加密，IV: ${ivHex}`;
-  } else {
-    console.log("未检测到加密信息");
-    infoDom.innerText += "\n⚠️ 未检测到加密（或加密信息位置异常）";
-  }
-
-  console.log("完整details对象:", details);
-  console.log("分片列表:", fragmentList);
-});
-
-
-  hls.on(Hls.Events.ERROR, (ev, data) => {
-    console.error("HLS错误", data);
-    infoDom.innerText += "\n❌ 加载失败，排查：CORS / auth_key过期 / key不是16字节二进制";
-  });
-
-  hls.loadSource(m3u8Url);
-  hls.attachMedia(video);
 };
 
-// 通用下载函数：传入分片数组
+// ========== 通用下载函数 ==========
 async function downloadFragList(selectedFrags){
   if(isDownloading || selectedFrags.length === 0) return;
   isDownloading = true;
@@ -141,7 +151,7 @@ async function downloadFragList(selectedFrags){
   };
   hls.on(Hls.Events.FRAG_DECRYPTED, onDecrypted);
 
-  // 顺序加载分片
+  // 顺序加载分片（hls内部自动用解析到的KEY+IV解密）
   for(const frag of selectedFrags){
     await new Promise(resolve=>{
       hls.trigger(Hls.Events.LOAD_FRAG, {frag});
