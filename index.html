@@ -2,93 +2,124 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>HLS分片解析+批量解密下载</title>
+<title>M3U8解析器｜分片查看+解密下载</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
-#info{white-space:pre-line;background:#f5f5f5;padding:10px;margin:10px 0;}
+*{box-sizing:border-box;font-family:system-ui}
+#urlInput{width:700px;padding:8px;font-size:14px}
+#info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:220px;overflow:auto}
+button{padding:8px 14px;margin:0 4px;cursor:pointer}
+video{margin-top:10px;width:900px}
 </style>
 </head>
 <body>
-<video id="video" controls width="900"></video>
-<div id="info"></div>
-<button id="downloadAll">下载全部分片并合并MP4</button>
-<script>
-const video = document.getElementById('video');
-const infoDom = document.getElementById('info');
-const btnDownloadAll = document.getElementById('downloadAll');
-const m3u8Url = "https://b.com/xxx/stream.m3u8"; // 你的资源域名
+<div>
+  <input id="urlInput" placeholder="在这里粘贴你的m3u8地址">
+  <button id="parseBtn">解析M3U8</button>
+  <button id="downloadAllBtn" disabled>下载全部分片并合并MP4</button>
+</div>
+<div id="info">等待解析...</div>
+<video id="video" controls></video>
 
-let hls = new Hls({
-  xhrSetup: (xhr) => { xhr.withCredentials = false; },
-  maxBufferLength: 30,
-});
-let fragmentList = []; // 全部分片元信息
-let decryptedBuffers = []; // 解密后的TS二进制
-let totalFragCount = 0;
+<script>
+const urlInput = document.getElementById('urlInput');
+const parseBtn = document.getElementById('parseBtn');
+const downloadAllBtn = document.getElementById('downloadAllBtn');
+const infoDom = document.getElementById('info');
+const video = document.getElementById('video');
+
+let hls = null;
+let fragmentList = [];
+let decryptedBuffers = [];
 let isDownloading = false;
 
-// 重点：LEVEL_LOADED，媒体列表解析完成，拿到所有分片
-hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
-  const level = hls.levels[data.level];
-  const details = level.details;
-  fragmentList = details.fragments;
-  totalFragCount = fragmentList.length;
+// 销毁上一个hls实例，防止多次冲突
+function destroyHls(){
+  if(hls){
+    hls.destroy();
+    hls = null;
+  }
+  fragmentList = [];
+  decryptedBuffers = [];
+  downloadAllBtn.disabled = true;
+  infoDom.innerText = "等待解析...";
+}
 
-  // 打印分片信息：序号、开始时间、结束时间、时长、地址
-  let text = `✅ 分片总数：${totalFragCount}\n`;
-  fragmentList.forEach((frag, idx) => {
-    text += `[${idx+1}] start:${frag.start.toFixed(2)}s | end:${frag.end.toFixed(2)}s | duration:${frag.duration.toFixed(2)}s | url:${frag.url}\n`;
+parseBtn.onclick = ()=>{
+  const m3u8Url = urlInput.value.trim();
+  if(!m3u8Url){
+    infoDom.innerText = "请输入m3u8地址";
+    return;
+  }
+  destroyHls();
+  infoDom.innerText = "正在加载解析m3u8...";
+
+  hls = new Hls({
+    xhrSetup: (xhr) => { xhr.withCredentials = false; },
+    maxBufferLength: 30,
   });
-  infoDom.innerText = text;
-  console.log("分片列表", fragmentList);
-});
 
-// 分片解密完成事件，拿到解密后的Uint8Array
-hls.on(Hls.Events.FRAG_DECRYPTED, (evt, data) => {
-  decryptedBuffers.push(data.payload);
-  console.log(`✅ 分片${data.frag.sn} 解密完成`);
-});
+  // 分片清单加载完成，拿到所有分片信息
+  hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
+    const level = hls.levels[data.level];
+    const details = level.details;
+    fragmentList = details.fragments;
+    const total = fragmentList.length;
 
-// 加载m3u8
-hls.loadSource(m3u8Url);
-hls.attachMedia(video);
+    let text = `✅ 分片总数：${total}\n`;
+    fragmentList.forEach((frag, idx) => {
+      text += `[${idx+1}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
+    });
+    infoDom.innerText = text;
+    downloadAllBtn.disabled = false;
+    console.log("分片列表详情", fragmentList);
+  });
 
-hls.on(Hls.Events.ERROR, (ev, data) => {
-  console.error("HLS错误", data);
-  if(data.type === Hls.ErrorTypes.NETWORK_ERROR) infoDom.innerText += "\n❌ 大概率CORS未配置";
-});
+  // 单个分片解密完成，收集解密后的TS二进制
+  hls.on(Hls.Events.FRAG_DECRYPTED, (evt, data) => {
+    decryptedBuffers.push(data.payload);
+    infoDom.innerText += `\n分片${data.frag.sn} 解密完成`;
+  });
 
-// 【一键下载全部分片，自动解密收集】
-btnDownloadAll.onclick = async () => {
+  hls.on(Hls.Events.ERROR, (ev, data) => {
+    console.error("HLS错误", data);
+    infoDom.innerText += "\n❌ 加载失败，检查：CORS配置 / m3u8是否点播 / key是否可跨域访问";
+  });
+
+  hls.loadSource(m3u8Url);
+  hls.attachMedia(video);
+};
+
+// 一键下载全部
+downloadAllBtn.onclick = async ()=>{
   if(isDownloading || fragmentList.length === 0) return;
   isDownloading = true;
   decryptedBuffers = [];
+  downloadAllBtn.disabled = true;
   infoDom.innerText += "\n🚀 开始批量下载所有分片...";
 
-  // 循环逐个加载所有分片，hls内部自动解密，触发FRAG_DECRYPTED
-  for(let frag of fragmentList){
+  // 顺序加载每一个分片，hls内部自动解密
+  for(const frag of fragmentList){
     await new Promise(resolve=>{
-      // 加载分片，加载完成解密后 FRAG_DECRYPTED 会收集payload
       hls.trigger(Hls.Events.LOAD_FRAG, {frag});
-      // 简单等待，正式项目可以用事件监听做更严谨的等待
-      setTimeout(resolve, 800);
+      setTimeout(resolve, 700);
     })
   }
-  infoDom.innerText += `\n✅ 全部分片解密完成，共收集：${decryptedBuffers.length} 个分片，开始合并封装MP4`;
 
-  // --- mux.js 合并TS分片，输出MP4 blob ---
+  infoDom.innerText += `\n✅ 全部解密完成，共${decryptedBuffers.length}个分片，开始封装MP4`;
   const transmuxer = new muxjs.mp4.Transmuxer();
   decryptedBuffers.forEach(buf=>transmuxer.push(buf));
   transmuxer.flush();
-  const mp4Buffer = transmuxer.getTransmuxedSegments()[0];
-  const blob = new Blob([mp4Buffer], {type:"video/mp4"});
+  const mp4Seg = transmuxer.getTransmuxedSegments()[0];
+  const blob = new Blob([mp4Seg], {type:"video/mp4"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "out.mp4";
+  a.download = "video.mp4";
   a.click();
   URL.revokeObjectURL(a.href);
   isDownloading = false;
+  downloadAllBtn.disabled = false;
 }
 </script>
 </body>
