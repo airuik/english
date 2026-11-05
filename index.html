@@ -2,22 +2,31 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>M3U8解析器｜分片查看+解密下载</title>
+<title>M3U8解析｜分片选择解密下载V1</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
 *{box-sizing:border-box;font-family:system-ui}
-#urlInput{width:700px;padding:8px;font-size:14px}
+#urlInput{width:720px;padding:8px;font-size:14px}
+.range-row{margin:8px 0}
 #info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:220px;overflow:auto}
 button{padding:8px 14px;margin:0 4px;cursor:pointer}
+input[type="number"]{width:80px;padding:6px}
 video{margin-top:10px;width:900px}
 </style>
 </head>
 <body>
 <div>
-  <input id="urlInput" placeholder="在这里粘贴你的m3u8地址">
+  <input id="urlInput" placeholder="粘贴m3u8地址">
   <button id="parseBtn">解析M3U8</button>
-  <button id="downloadAllBtn" disabled>下载全部分片并合并MP4</button>
+</div>
+<div class="range-row">
+  <span>选择分片区间：</span>
+  <input id="startSn" type="number" min="1" placeholder="起始分片">
+  <span> ~ </span>
+  <input id="endSn" type="number" min="1" placeholder="结束分片">
+  <button id="downloadRangeBtn" disabled>下载选中区间分片</button>
+  <button id="downloadAllBtn" disabled>下载全部分片</button>
 </div>
 <div id="info">等待解析...</div>
 <video id="video" controls></video>
@@ -26,23 +35,24 @@ video{margin-top:10px;width:900px}
 const urlInput = document.getElementById('urlInput');
 const parseBtn = document.getElementById('parseBtn');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
+const downloadRangeBtn = document.getElementById('downloadRangeBtn');
+const startSnInput = document.getElementById('startSn');
+const endSnInput = document.getElementById('endSn');
 const infoDom = document.getElementById('info');
 const video = document.getElementById('video');
 
 let hls = null;
 let fragmentList = [];
-let decryptedBuffers = [];
 let isDownloading = false;
 
-// 销毁上一个hls实例，防止多次冲突
 function destroyHls(){
   if(hls){
     hls.destroy();
     hls = null;
   }
   fragmentList = [];
-  decryptedBuffers = [];
   downloadAllBtn.disabled = true;
+  downloadRangeBtn.disabled = true;
   infoDom.innerText = "等待解析...";
 }
 
@@ -60,7 +70,6 @@ parseBtn.onclick = ()=>{
     maxBufferLength: 30,
   });
 
-  // 分片清单加载完成，拿到所有分片信息
   hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
     const level = hls.levels[data.level];
     const details = level.details;
@@ -69,45 +78,52 @@ parseBtn.onclick = ()=>{
 
     let text = `✅ 分片总数：${total}\n`;
     fragmentList.forEach((frag, idx) => {
-      text += `[${idx+1}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
+      const seq = idx + 1;
+      text += `[${seq}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
     });
     infoDom.innerText = text;
     downloadAllBtn.disabled = false;
+    downloadRangeBtn.disabled = false;
     console.log("分片列表详情", fragmentList);
-  });
-
-  // 单个分片解密完成，收集解密后的TS二进制
-  hls.on(Hls.Events.FRAG_DECRYPTED, (evt, data) => {
-    decryptedBuffers.push(data.payload);
-    infoDom.innerText += `\n分片${data.frag.sn} 解密完成`;
   });
 
   hls.on(Hls.Events.ERROR, (ev, data) => {
     console.error("HLS错误", data);
-    infoDom.innerText += "\n❌ 加载失败，检查：CORS配置 / m3u8是否点播 / key是否可跨域访问";
+    infoDom.innerText += "\n❌ 加载失败，检查：CORS / 是否点播AES-128 / key跨域";
   });
 
   hls.loadSource(m3u8Url);
   hls.attachMedia(video);
 };
 
-// 一键下载全部
-downloadAllBtn.onclick = async ()=>{
-  if(isDownloading || fragmentList.length === 0) return;
+// 通用下载函数：传入分片数组
+async function downloadFragList(selectedFrags){
+  if(isDownloading || selectedFrags.length === 0) return;
   isDownloading = true;
-  decryptedBuffers = [];
   downloadAllBtn.disabled = true;
-  infoDom.innerText += "\n🚀 开始批量下载所有分片...";
+  downloadRangeBtn.disabled = true;
+  const decryptedBuffers = [];
+  infoDom.innerText += `\n🚀 开始下载 ${selectedFrags.length} 个分片...`;
 
-  // 顺序加载每一个分片，hls内部自动解密
-  for(const frag of fragmentList){
+  // 监听解密事件收集数据
+  const onDecrypted = (evt, data) => {
+    decryptedBuffers.push(data.payload);
+    infoDom.innerText += `\n分片${data.frag.sn} 解密完成`;
+  };
+  hls.on(Hls.Events.FRAG_DECRYPTED, onDecrypted);
+
+  // 顺序加载分片
+  for(const frag of selectedFrags){
     await new Promise(resolve=>{
       hls.trigger(Hls.Events.LOAD_FRAG, {frag});
       setTimeout(resolve, 700);
     })
   }
 
-  infoDom.innerText += `\n✅ 全部解密完成，共${decryptedBuffers.length}个分片，开始封装MP4`;
+  // 移除监听
+  hls.off(Hls.Events.FRAG_DECRYPTED, onDecrypted);
+
+  infoDom.innerText += `\n✅ 选中分片解密完成，共${decryptedBuffers.length}个，开始封装MP4`;
   const transmuxer = new muxjs.mp4.Transmuxer();
   decryptedBuffers.forEach(buf=>transmuxer.push(buf));
   transmuxer.flush();
@@ -115,11 +131,40 @@ downloadAllBtn.onclick = async ()=>{
   const blob = new Blob([mp4Seg], {type:"video/mp4"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "video.mp4";
+  a.download = "clip.mp4";
   a.click();
   URL.revokeObjectURL(a.href);
+
   isDownloading = false;
   downloadAllBtn.disabled = false;
+  downloadRangeBtn.disabled = false;
+}
+
+// 下载全部
+downloadAllBtn.onclick = async ()=>{
+  await downloadFragList(fragmentList);
+}
+
+// 下载区间分片
+downloadRangeBtn.onclick = async ()=>{
+  const startIdx = Number(startSnInput.value) - 1;
+  const endIdx = Number(endSnInput.value) - 1;
+  const maxIdx = fragmentList.length - 1;
+
+  if(isNaN(startIdx) || isNaN(endIdx)){
+    infoDom.innerText += "\n❌ 请输入合法数字";
+    return;
+  }
+  if(startIdx < 0 || endIdx > maxIdx){
+    infoDom.innerText += `\n❌ 范围越界！可用范围：1 ~ ${fragmentList.length}`;
+    return;
+  }
+  if(startIdx > endIdx){
+    infoDom.innerText += "\n❌ 起始分片不能大于结束分片";
+    return;
+  }
+  const selected = fragmentList.slice(startIdx, endIdx + 1);
+  await downloadFragList(selected);
 }
 </script>
 </body>
