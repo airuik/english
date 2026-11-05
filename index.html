@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>V3</title>
+<title>V4</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
@@ -71,34 +71,51 @@ parseBtn.onclick = ()=>{
   });
 
   hls.on(Hls.Events.LEVEL_LOADED, (evt, data) => {
-    const level = hls.levels[data.level];
-    const details = level.details;
-    fragmentList = details.fragments;
-    const total = fragmentList.length;
+  const level = hls.levels[data.level];
+  const details = level.details;
+  fragmentList = details.fragments;
+  const total = fragmentList.length;
 
-    let text = `✅ 分片总数：${total}\n`;
-    fragmentList.forEach((frag, idx) => {
-      const seq = idx + 1;
-      text += `[${seq}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
-    });
-    infoDom.innerText = text;
-    downloadAllBtn.disabled = false;
-    downloadRangeBtn.disabled = false;
-
-    // ========== 【重点修改：读取全局加密信息，不是分片上的key】 ==========
-    console.log("===== 全局加密信息 details =====", details);
-    if(details.encrypted){
-      const decryptData = details.decryptdata;
-      console.log("METHOD:", decryptData.method);
-      console.log("KEY URI:", decryptData.uri);
-      const ivHex = Array.from(decryptData.iv).map(b=>b.toString(16).padStart(2,'0')).join('');
-      console.log("IV(hex):", ivHex);
-      infoDom.innerText += `\n✅ 全局AES-128加密，自动使用KEY+IV解密\nIV:${ivHex}`;
-    }else{
-      infoDom.innerText += "\n⚠️ 无加密";
-    }
-    console.log("分片列表详情", fragmentList);
+  let text = `✅ 分片总数：${total}\n`;
+  fragmentList.forEach((frag, idx) => {
+    const seq = idx + 1;
+    text += `[${seq}] SN:${frag.sn} | 开始:${frag.start.toFixed(2)}s | 结束:${frag.end.toFixed(2)}s | 时长:${frag.duration.toFixed(2)}s\n`;
   });
+  infoDom.innerText = text;
+  downloadAllBtn.disabled = false;
+  downloadRangeBtn.disabled = false;
+
+  // ========== 兼容全局密钥的加密信息读取 ==========
+  let encryptInfo = null;
+  // 优先从 details.decryptdata 取（全局密钥标准位置）
+  if (details.decryptdata) {
+    encryptInfo = details.decryptdata;
+  }
+  // 兜底：如果 details 没有，尝试从 level 上取
+  else if (level.decryptdata) {
+    encryptInfo = level.decryptdata;
+  }
+  // 再兜底：取第一个分片的 key（分片独立密钥格式）
+  else if (fragmentList[0]?.key) {
+    encryptInfo = fragmentList[0].key;
+  }
+
+  if (encryptInfo) {
+    const ivHex = Array.from(encryptInfo.iv).map(b => b.toString(16).padStart(2, '0')).join('');
+    console.log("===== 加密信息 =====");
+    console.log("加密方式:", encryptInfo.method);
+    console.log("密钥地址:", encryptInfo.uri);
+    console.log("IV(十六进制):", ivHex);
+    infoDom.innerText += `\n✅ 已识别AES-128加密，IV: ${ivHex}`;
+  } else {
+    console.log("未检测到加密信息");
+    infoDom.innerText += "\n⚠️ 未检测到加密（或加密信息位置异常）";
+  }
+
+  console.log("完整details对象:", details);
+  console.log("分片列表:", fragmentList);
+});
+
 
   hls.on(Hls.Events.ERROR, (ev, data) => {
     console.error("HLS错误", data);
