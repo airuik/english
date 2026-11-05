@@ -2,17 +2,17 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>M3U8解析｜分片选择解密下载V1</title>
+<title>M3U8 AES128 解析+分片选择下载</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
 *{box-sizing:border-box;font-family:system-ui}
-#urlInput{width:720px;padding:8px;font-size:14px}
-.range-row{margin:8px 0}
-#info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:220px;overflow:auto}
+#urlInput{width:740px;padding:8px;font-size:14px}
+.range-row{margin:10px 0}
+#info{white-space:pre-line;background:#f5f5f5;padding:12px;margin:10px 0;min-height:240px;overflow:auto}
 button{padding:8px 14px;margin:0 4px;cursor:pointer}
 input[type="number"]{width:80px;padding:6px}
-video{margin-top:10px;width:900px}
+video{margin-top:10px;width:920px}
 </style>
 </head>
 <body>
@@ -21,11 +21,11 @@ video{margin-top:10px;width:900px}
   <button id="parseBtn">解析M3U8</button>
 </div>
 <div class="range-row">
-  <span>选择分片区间：</span>
+  <span>分片区间：</span>
   <input id="startSn" type="number" min="1" placeholder="起始分片">
   <span> ~ </span>
   <input id="endSn" type="number" min="1" placeholder="结束分片">
-  <button id="downloadRangeBtn" disabled>下载选中区间分片</button>
+  <button id="downloadRangeBtn" disabled>下载区间分片</button>
   <button id="downloadAllBtn" disabled>下载全部分片</button>
 </div>
 <div id="info">等待解析...</div>
@@ -84,12 +84,24 @@ parseBtn.onclick = ()=>{
     infoDom.innerText = text;
     downloadAllBtn.disabled = false;
     downloadRangeBtn.disabled = false;
+
+    // ========== 重点调试：打印 KEY / IV 信息 ==========
+    const firstFrag = fragmentList[0];
+    console.log("===== 分片KEY信息 =====", firstFrag.key);
+    if(firstFrag.key){
+      console.log("METHOD:", firstFrag.key.method);
+      console.log("KEY URI:", firstFrag.key.uri);
+      console.log("IV(hex):", Array.from(firstFrag.key.iv).map(b=>b.toString(16).padStart(2,'0')).join(''));
+      infoDom.innerText += "\n✅ 成功读取 #EXT-X-KEY，会自动使用该KEY+IV解密";
+    }else{
+      infoDom.innerText += "\n⚠️ 未读取到 EXT-X-KEY，无加密";
+    }
     console.log("分片列表详情", fragmentList);
   });
 
   hls.on(Hls.Events.ERROR, (ev, data) => {
     console.error("HLS错误", data);
-    infoDom.innerText += "\n❌ 加载失败，检查：CORS / 是否点播AES-128 / key跨域";
+    infoDom.innerText += "\n❌ 加载失败，排查：CORS / auth_key过期 / key不是16字节二进制";
   });
 
   hls.loadSource(m3u8Url);
@@ -105,7 +117,6 @@ async function downloadFragList(selectedFrags){
   const decryptedBuffers = [];
   infoDom.innerText += `\n🚀 开始下载 ${selectedFrags.length} 个分片...`;
 
-  // 监听解密事件收集数据
   const onDecrypted = (evt, data) => {
     decryptedBuffers.push(data.payload);
     infoDom.innerText += `\n分片${data.frag.sn} 解密完成`;
@@ -120,7 +131,6 @@ async function downloadFragList(selectedFrags){
     })
   }
 
-  // 移除监听
   hls.off(Hls.Events.FRAG_DECRYPTED, onDecrypted);
 
   infoDom.innerText += `\n✅ 选中分片解密完成，共${decryptedBuffers.length}个，开始封装MP4`;
