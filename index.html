@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>V2</title>
+<title>V3</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/mux.js@6.3.0/dist/mux.min.js"></script>
 <style>
@@ -85,16 +85,17 @@ parseBtn.onclick = ()=>{
     downloadAllBtn.disabled = false;
     downloadRangeBtn.disabled = false;
 
-    // ========== 重点调试：打印 KEY / IV 信息 ==========
-    const firstFrag = fragmentList[0];
-    console.log("===== 分片KEY信息 =====", firstFrag.key);
-    if(firstFrag.key){
-      console.log("METHOD:", firstFrag.key.method);
-      console.log("KEY URI:", firstFrag.key.uri);
-      console.log("IV(hex):", Array.from(firstFrag.key.iv).map(b=>b.toString(16).padStart(2,'0')).join(''));
-      infoDom.innerText += "\n✅ 成功读取 #EXT-X-KEY，会自动使用该KEY+IV解密";
+    // ========== 【重点修改：读取全局加密信息，不是分片上的key】 ==========
+    console.log("===== 全局加密信息 details =====", details);
+    if(details.encrypted){
+      const decryptData = details.decryptdata;
+      console.log("METHOD:", decryptData.method);
+      console.log("KEY URI:", decryptData.uri);
+      const ivHex = Array.from(decryptData.iv).map(b=>b.toString(16).padStart(2,'0')).join('');
+      console.log("IV(hex):", ivHex);
+      infoDom.innerText += `\n✅ 全局AES-128加密，自动使用KEY+IV解密\nIV:${ivHex}`;
     }else{
-      infoDom.innerText += "\n⚠️ 未读取到 EXT-X-KEY，无加密";
+      infoDom.innerText += "\n⚠️ 无加密";
     }
     console.log("分片列表详情", fragmentList);
   });
