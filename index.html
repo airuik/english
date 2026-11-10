@@ -207,7 +207,7 @@ async function downloadFragList(selectedFrags){
     }
     progressDom.innerText = `✅ 全部分片解密完成，正在合并导出`;
     const finalBlob = new Blob(decryptedBuffers, {type:"video/mp4"});
-    downloadBlob(finalBlob, "video.mp4");
+    downloadBlob(finalBlob, "video.mp");
     progressDom.innerText = `🎉 导出成功 video.mp4`;
   } catch (err) {
     progressDom.innerText = "❌ 下载解密失败："+ err.message;
