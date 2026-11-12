@@ -258,10 +258,11 @@ async function importAesKey(keyBuffer) {
   );
 }
 
-// AES解密分片
+// AES解密分片【修复版本】
 async function decryptFragment(encryptedBuffer, key, iv) {
   const decrypted = await crypto.subtle.decrypt(
     { name: 'AES-CBC', iv: iv },
+    key,
     encryptedBuffer
   );
   return new Uint8Array(decrypted);
