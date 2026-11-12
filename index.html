@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>M3U8 手动解密下载｜直接合并TS改后缀mp4</title>
+<title>M3U8 工具｜在线播放 + 并发解密下载</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
 <style>
 * {
   box-sizing: border-box;
@@ -71,17 +72,18 @@ button:disabled {
   background-color: #2563eb;
   color: white;
 }
-#parseBtn:hover:not(:disabled) {
-  background-color: #1d4ed8;
+#playBtn {
+  background-color: #7c3aed;
+  color: white;
 }
 #downloadAllBtn, #downloadRangeBtn {
   background-color: #059669;
   color: white;
 }
+#parseBtn:hover:not(:disabled) { background-color: #1d4ed8; }
+#playBtn:hover:not(:disabled) { background-color: #6d28d9; }
 #downloadAllBtn:hover:not(:disabled),
-#downloadRangeBtn:hover:not(:disabled) {
-  background-color: #047857;
-}
+#downloadRangeBtn:hover:not(:disabled) { background-color: #047857; }
 .range-row {
   display: flex;
   align-items: center;
@@ -147,12 +149,13 @@ video {
 </style>
 </head>
 <body>
-<div class="title">M3U8 手动解密下载工具【并发版】</div>
+<div class="title">M3U8 工具｜在线播放 + 并发解密下载</div>
 
 <div class="card">
   <div class="input-row">
     <input id="urlInput" placeholder="粘贴 m3u8 地址">
     <button id="parseBtn">解析M3U8</button>
+    <button id="playBtn">在线播放</button>
   </div>
 </div>
 
@@ -163,16 +166,18 @@ video {
 <div class="card">
   <div class="range-row">
     <span>分片区间（序号）：</span>
+    <div>
     <input id="startSn" type="number" min="1" placeholder="起始">
     <span> ~ </span>
     <input id="endSn" type="number" min="1" placeholder="结束">
+    </div>
     <button id="downloadRangeBtn" disabled>下载区间</button>
     <button id="downloadAllBtn" disabled>下载全部</button>
   </div>
 </div>
 
 <div class="card">
-  <div id="progress">等待下载任务...</div>
+  <div id="progress">等待任务...</div>
 </div>
 
 <div class="card video-wrap">
@@ -182,6 +187,7 @@ video {
 <script>
 const urlInput = document.getElementById('urlInput');
 const parseBtn = document.getElementById('parseBtn');
+const playBtn = document.getElementById('playBtn');
 const downloadAllBtn = document.getElementById('downloadAllBtn');
 const downloadRangeBtn = document.getElementById('downloadRangeBtn');
 const startSnInput = document.getElementById('startSn');
@@ -192,9 +198,10 @@ const video = document.getElementById('video');
 
 let m3u8Data = null;
 let isDownloading = false;
-const CONCURRENCY = 6; // 并发数量，建议 4~8，不要开太大
+let hls = null;
+const CONCURRENCY = 6;
 
-// 十六进制字符串转 Uint8Array
+// 十六进制转 Uint8Array
 function hexToUint8Array(hex) {
   hex = hex.replace(/^0x/, '');
   if (hex.length % 2 !== 0) hex = '0' + hex;
@@ -231,15 +238,10 @@ function parseM3u8(text, baseUrl) {
       result.mediaSequence = parseInt(line.split(':')[1]);
       sn = result.mediaSequence;
     } else if (line.startsWith('#EXTINF:')) {
-      const duration = parseFloat(line.split(':')[1].split(',')[0]);
       i++;
       if (i < lines.length && !lines[i].startsWith('#')) {
         const absoluteUrl = new URL(lines[i], baseUrl).href;
-        result.fragments.push({
-          sn: sn,
-          duration: duration,
-          url: absoluteUrl
-        });
+        result.fragments.push({ sn, url: absoluteUrl });
         sn++;
       }
     }
@@ -247,18 +249,7 @@ function parseM3u8(text, baseUrl) {
   return result;
 }
 
-// 导入AES密钥
-async function importAesKey(keyBuffer) {
-  return await crypto.subtle.importKey(
-    'raw',
-    keyBuffer,
-    { name: 'AES-CBC' },
-    false,
-    ['decrypt']
-  );
-}
-
-// AES解密分片【修复版本】
+// AES解密
 async function decryptFragment(encryptedBuffer, key, iv) {
   const decrypted = await crypto.subtle.decrypt(
     { name: 'AES-CBC', iv: iv },
@@ -268,8 +259,8 @@ async function decryptFragment(encryptedBuffer, key, iv) {
   return new Uint8Array(decrypted);
 }
 
-// 下载文件
-function downloadBlob(blob, filename){
+// 下载blob
+function downloadBlob(blob, filename) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -277,144 +268,134 @@ function downloadBlob(blob, filename){
   URL.revokeObjectURL(a.href);
 }
 
-// 并发任务调度（限制并发数）
+// 并发池
 async function poolRunner(tasks, concurrency) {
   const results = new Array(tasks.length);
   let idx = 0;
   const run = async () => {
-    while(idx < tasks.length) {
+    while (idx < tasks.length) {
       const curIdx = idx++;
       results[curIdx] = await tasks[curIdx]();
     }
   }
-  const workers = Array.from({length: concurrency}, () => run());
+  const workers = Array.from({ length: concurrency }, () => run());
   await Promise.all(workers);
   return results;
 }
 
-parseBtn.onclick = async ()=>{
+// 【在线播放 m3u8，hls.js】
+playBtn.onclick = async () => {
   const m3u8Url = urlInput.value.trim();
-  if(!m3u8Url){
+  if (!m3u8Url) return alert("请输入m3u8地址");
+
+  progressDom.innerText = "正在加载在线播放...";
+  if (hls) {
+    hls.destroy();
+    hls = null;
+  }
+  if (Hls.isSupported()) {
+    hls = new Hls();
+    hls.loadSource(m3u8Url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play();
+      progressDom.innerText = "✅ 在线播放已加载（直接读取远端m3u8分片）";
+    });
+    hls.on(Hls.Events.ERROR, (e, data) => {
+      progressDom.innerText = "❌ 播放异常：" + data.details;
+      console.error(data);
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari原生支持m3u8
+    video.src = m3u8Url;
+    video.play();
+    progressDom.innerText = "✅ Safari原生播放m3u8";
+  }
+}
+
+parseBtn.onclick = async () => {
+  const m3u8Url = urlInput.value.trim();
+  if (!m3u8Url) {
     keyInfoDom.innerText = "请输入m3u8地址";
     return;
   }
   m3u8Data = null;
   downloadAllBtn.disabled = true;
   downloadRangeBtn.disabled = true;
-  keyInfoDom.innerText = "正在请求m3u8原始文本...";
+  keyInfoDom.innerText = "正在请求m3u8文本...";
   progressDom.innerText = "解析中...";
 
   try {
     const resp = await fetch(m3u8Url);
-    if(!resp.ok) throw new Error("请求失败：HTTP "+resp.status);
-    const m3u8Text = await resp.text();
-    m3u8Data = parseM3u8(m3u8Text, m3u8Url);
-
-    if(m3u8Data.encrypted){
-      keyInfoDom.innerText = 
-`✅ 从 #EXT-X-KEY 行解析成功
-加密方式：${m3u8Data.method}
-密钥地址：${m3u8Data.keyUri}
-IV(十六进制)：${m3u8Data.ivHex || '未指定（使用分片SN）'}
-⚠️ 提示：输出文件后缀为mp4，内部仍是TS流，部分播放器无法打开`;
-    }else{
-      keyInfoDom.innerText = "⚠️ 该m3u8无加密";
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const txt = await resp.text();
+    m3u8Data = parseM3u8(txt, m3u8Url);
+    if (m3u8Data.encrypted) {
+      keyInfoDom.innerText =`✅ 解析成功`;
+    } else {
+      keyInfoDom.innerText = "✅ 解析成功，无加密";
     }
-    progressDom.innerText = `解析完成，总分片：${m3u8Data.fragments.length} 片`;
+    progressDom.innerText = `分片总数：${m3u8Data.fragments.length}`;
     downloadAllBtn.disabled = false;
     downloadRangeBtn.disabled = false;
   } catch (err) {
-    keyInfoDom.innerText = "❌ 解析失败："+ err.message +"\n请检查地址、CORS跨域";
-    progressDom.innerText = "解析失败";
-    console.error(err);
+    keyInfoDom.innerText = "❌ 解析失败：" + err.message;
   }
 };
 
-// 下载处理函数【并发调度版本】
-async function downloadFragList(selectedFrags){
-  if(isDownloading || selectedFrags.length === 0) return;
+// 并发下载解密（原来的下载功能保留）
+async function downloadFragList(selectedFrags) {
+  if (isDownloading || selectedFrags.length === 0) return;
   isDownloading = true;
   downloadAllBtn.disabled = true;
   downloadRangeBtn.disabled = true;
   let cryptoKey = null;
   let ivBase = null;
   const total = selectedFrags.length;
-
   try {
-    if(m3u8Data.encrypted){
-      progressDom.innerText = "🔑 正在下载密钥文件...";
-      const keyResp = await fetch(m3u8Data.keyUri);
-      if(!keyResp.ok) throw new Error("密钥下载失败：HTTP "+keyResp.status);
-      const keyBuffer = await keyResp.arrayBuffer();
-      if(keyBuffer.byteLength !== 16){
-        throw new Error(`密钥长度错误：${keyBuffer.byteLength}字节，AES-128要求16字节`);
-      }
-      cryptoKey = await importAesKey(keyBuffer);
-      if(m3u8Data.ivHex){
-        ivBase = hexToUint8Array(m3u8Data.ivHex);
-      }
-      progressDom.innerText = `✅ 密钥下载成功，准备并发下载分片...`;
+    if (m3u8Data.encrypted) {
+      progressDom.innerText = "🔑 拉取密钥";
+      const kr = await fetch(m3u8Data.keyUri);
+      if (!kr.ok) throw new Error("密钥失败");
+      const kb = await kr.arrayBuffer();
+      if (kb.byteLength !== 16) throw new Error("密钥长度不对");
+      cryptoKey = await crypto.subtle.importKey('raw', kb, { name: 'AES-CBC' }, false, ['decrypt']);
+      if (m3u8Data.ivHex) ivBase = hexToUint8Array(m3u8Data.ivHex);
     }
-
-    // 构造任务列表，每个任务返回 {sn, data}
-    const taskList = selectedFrags.map((frag, taskIndex)=>{
-      return async ()=>{
-        progressDom.innerText = `📥 正在处理 ${taskIndex+1}/${total}，分片SN:${frag.sn}`;
-        const resp = await fetch(frag.url);
-        if(!resp.ok) throw new Error(`分片SN${frag.sn}下载失败：HTTP ${resp.status}`);
-        const buf = await resp.arrayBuffer();
-        let decBuf;
-        if(m3u8Data.encrypted){
-          const currentIv = ivBase || hexToUint8Array(frag.sn.toString(16).padStart(32, '0'));
-          decBuf = await decryptFragment(buf, cryptoKey, currentIv);
-        }else{
-          decBuf = new Uint8Array(buf);
-        }
-        return {sn: frag.sn, data: decBuf};
+    const taskList = selectedFrags.map((frag, i) => async () => {
+      const r = await fetch(frag.url);
+      if (!r.ok) throw new Error(`分片${frag.sn}失败`);
+      const buf = await r.arrayBuffer();
+      let d;
+      if (m3u8Data.encrypted) {
+        const iv = ivBase || hexToUint8Array(frag.sn.toString(16).padStart(32, '0'));
+        d = await decryptFragment(buf, cryptoKey, iv);
+      } else {
+        d = new Uint8Array(buf);
       }
-    })
-
-    // 并发池执行
-    const rawResult = await poolRunner(taskList, CONCURRENCY);
-    // 【重点】按SN排序，保证顺序正确！
-    rawResult.sort((a,b)=> a.sn - b.sn);
-    const finalBuffers = rawResult.map(item=>item.data);
-
-    progressDom.innerText = `✅ 全部分片解密完成，正在合并导出`;
-    const finalBlob = new Blob(finalBuffers, {type:"video/mp4"});
-    downloadBlob(finalBlob, "video.mp4");
-    progressDom.innerText = `🎉 导出成功 video.mp4`;
-  } catch (err) {
-    progressDom.innerText = "❌ 下载解密失败："+ err.message;
-    console.error(err);
+      progressDom.innerText = `📥 下载 ${i+1}/${total}, SN:${frag.sn}`;
+      return { sn: frag.sn, data: d };
+    });
+    const res = await poolRunner(taskList, CONCURRENCY);
+    res.sort((a, b) => a.sn - b.sn);
+    const bufs = res.map(x => x.data);
+    const blob = new Blob(bufs, { type: "video/mp4" });
+    downloadBlob(blob, "video.mp4");
+    progressDom.innerText = "✅ 下载合并完成";
+  } catch (e) {
+    progressDom.innerText = "❌ 下载失败：" + e.message;
   }
   isDownloading = false;
   downloadAllBtn.disabled = false;
   downloadRangeBtn.disabled = false;
 }
 
-downloadAllBtn.onclick = async ()=>{
-  await downloadFragList(m3u8Data.fragments);
-}
-
-downloadRangeBtn.onclick = async ()=>{
-  const startIdx = Number(startSnInput.value) - 1;
-  const endIdx = Number(endSnInput.value) - 1;
-  const maxIdx = m3u8Data.fragments.length - 1;
-  if(isNaN(startIdx) || isNaN(endIdx)){
-    progressDom.innerText = "❌ 请输入合法数字";
-    return;
-  }
-  if(startIdx < 0 || endIdx > maxIdx){
-    progressDom.innerText = `❌ 范围越界！总分片：${m3u8Data.fragments.length}`;
-    return;
-  }
-  if(startIdx > endIdx){
-    progressDom.innerText = "❌ 起始分片不能大于结束分片";
-    return;
-  }
-  const selected = m3u8Data.fragments.slice(startIdx, endIdx + 1);
-  await downloadFragList(selected);
+downloadAllBtn.onclick = () => downloadFragList(m3u8Data.fragments);
+downloadRangeBtn.onclick = () => {
+  const s = Number(startSnInput.value) - 1;
+  const e = Number(endSnInput.value);
+  const list = m3u8Data.fragments.slice(s, e);
+  downloadFragList(list);
 }
 </script>
 </body>
