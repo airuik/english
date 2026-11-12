@@ -2,34 +2,182 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>M3U8 手动解密下载｜直接合并TS改后缀mp4</title>
 <style>
-*{box-sizing:border-box;font-family:system-ui}
-#urlInput{width:740px;padding:8px;font-size:14px}
-.range-row{margin:10px 0}
-#keyInfo{background:#e8f4fd;padding:12px;margin:10px 0;border-left:4px solid #2196f3;white-space:pre-line}
-#progress{background:#fff8e1;padding:10px;margin:10px 0;border-left:4px solid #ff9800;white-space:pre-line;min-height:60px}
-button{padding:8px 14px;margin:0 4px;cursor:pointer}
-input[type="number"]{width:80px;padding:6px}
-video{margin-top:10px;width:920px}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+body {
+  background-color: #f5f7fa;
+  padding: 16px;
+  max-width: 1000px;
+  margin: 0 auto;
+  color: #222;
+  line-height: 1.55;
+}
+.card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+.title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  text-align: center;
+  color: #1f2937;
+}
+.input-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+#urlInput {
+  flex: 1;
+  min-width: 220px;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  outline: none;
+  transition: border 0.2s;
+}
+#urlInput:focus {
+  border-color: #2563eb;
+}
+button {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+button:disabled {
+  background-color: #d1d5db !important;
+  color: #888 !important;
+  cursor: not-allowed;
+}
+#parseBtn {
+  background-color: #2563eb;
+  color: white;
+}
+#parseBtn:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+#downloadAllBtn, #downloadRangeBtn {
+  background-color: #059669;
+  color: white;
+}
+#downloadAllBtn:hover:not(:disabled),
+#downloadRangeBtn:hover:not(:disabled) {
+  background-color: #047857;
+}
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.range-row span {
+  font-size: 14px;
+  color: #444;
+}
+input[type="number"] {
+  width: 84px;
+  padding: 9px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+}
+input[type="number"]:focus {
+  border-color: #2563eb;
+}
+#keyInfo {
+  background: #e8f4fd;
+  padding: 14px;
+  border-left: 4px solid #2196f3;
+  border-radius: 8px;
+  white-space: pre-line;
+  font-size: 14px;
+  color: #1e3a5f;
+}
+#progress {
+  background: #fff8e1;
+  padding: 14px;
+  border-left: 4px solid #ff9800;
+  border-radius: 8px;
+  white-space: pre-line;
+  min-height: 64px;
+  font-size: 14px;
+  color: #6b4800;
+}
+.video-wrap {
+  margin-top: 10px;
+}
+video {
+  width: 100%;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}
+@media (max-width: 640px) {
+  .input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .range-row {
+    justify-content: flex-start;
+  }
+  button {
+    width: 100%;
+  }
+}
 </style>
 </head>
 <body>
-<div>
-  <input id="urlInput" placeholder="粘贴m3u8地址">
-  <button id="parseBtn">解析M3U8</button>
+<div class="title">M3U8 手动解密下载工具【并发版】</div>
+
+<div class="card">
+  <div class="input-row">
+    <input id="urlInput" placeholder="粘贴 m3u8 地址">
+    <button id="parseBtn">解析M3U8</button>
+  </div>
 </div>
-<div id="keyInfo">等待解析 KEY / IV 信息...</div>
-<div class="range-row">
-  <span>分片区间（序号）：</span>
-  <input id="startSn" type="number" min="1" placeholder="起始">
-  <span> ~ </span>
-  <input id="endSn" type="number" min="1" placeholder="结束">
-  <button id="downloadRangeBtn" disabled>下载区间</button>
-  <button id="downloadAllBtn" disabled>下载全部</button>
+
+<div class="card">
+  <div id="keyInfo">等待解析 KEY / IV 信息...</div>
 </div>
-<div id="progress">等待下载任务...</div>
-<video id="video" controls></video>
+
+<div class="card">
+  <div class="range-row">
+    <span>分片区间（序号）：</span>
+    <input id="startSn" type="number" min="1" placeholder="起始">
+    <span> ~ </span>
+    <input id="endSn" type="number" min="1" placeholder="结束">
+    <button id="downloadRangeBtn" disabled>下载区间</button>
+    <button id="downloadAllBtn" disabled>下载全部</button>
+  </div>
+</div>
+
+<div class="card">
+  <div id="progress">等待下载任务...</div>
+</div>
+
+<div class="card video-wrap">
+  <video id="video" controls></video>
+</div>
 
 <script>
 const urlInput = document.getElementById('urlInput');
@@ -44,6 +192,7 @@ const video = document.getElementById('video');
 
 let m3u8Data = null;
 let isDownloading = false;
+const CONCURRENCY = 6; // 并发数量，建议 4~8，不要开太大
 
 // 十六进制字符串转 Uint8Array
 function hexToUint8Array(hex) {
@@ -113,7 +262,6 @@ async function importAesKey(keyBuffer) {
 async function decryptFragment(encryptedBuffer, key, iv) {
   const decrypted = await crypto.subtle.decrypt(
     { name: 'AES-CBC', iv: iv },
-    key,
     encryptedBuffer
   );
   return new Uint8Array(decrypted);
@@ -126,6 +274,21 @@ function downloadBlob(blob, filename){
   a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// 并发任务调度（限制并发数）
+async function poolRunner(tasks, concurrency) {
+  const results = new Array(tasks.length);
+  let idx = 0;
+  const run = async () => {
+    while(idx < tasks.length) {
+      const curIdx = idx++;
+      results[curIdx] = await tasks[curIdx]();
+    }
+  }
+  const workers = Array.from({length: concurrency}, () => run());
+  await Promise.all(workers);
+  return results;
 }
 
 parseBtn.onclick = async ()=>{
@@ -166,16 +329,17 @@ IV(十六进制)：${m3u8Data.ivHex || '未指定（使用分片SN）'}
   }
 };
 
-// 下载处理函数
+// 下载处理函数【并发调度版本】
 async function downloadFragList(selectedFrags){
   if(isDownloading || selectedFrags.length === 0) return;
   isDownloading = true;
   downloadAllBtn.disabled = true;
   downloadRangeBtn.disabled = true;
-  const decryptedBuffers = [];
+  let cryptoKey = null;
+  let ivBase = null;
+  const total = selectedFrags.length;
+
   try {
-    let cryptoKey = null;
-    let iv = null;
     if(m3u8Data.encrypted){
       progressDom.innerText = "🔑 正在下载密钥文件...";
       const keyResp = await fetch(m3u8Data.keyUri);
@@ -186,28 +350,38 @@ async function downloadFragList(selectedFrags){
       }
       cryptoKey = await importAesKey(keyBuffer);
       if(m3u8Data.ivHex){
-        iv = hexToUint8Array(m3u8Data.ivHex);
+        ivBase = hexToUint8Array(m3u8Data.ivHex);
       }
-      progressDom.innerText = `✅ 密钥下载成功，准备下载分片...`;
+      progressDom.innerText = `✅ 密钥下载成功，准备并发下载分片...`;
     }
-    const total = selectedFrags.length;
-    for(let i = 0; i < total; i++){
-      const frag = selectedFrags[i];
-      progressDom.innerText = `📥 正在处理第 ${i+1} / ${total} 个分片`;
-      const resp = await fetch(frag.url);
-      if(!resp.ok) throw new Error(`分片${i+1}下载失败：HTTP ${resp.status}`);
-      const encryptedBuffer = await resp.arrayBuffer();
-      if(m3u8Data.encrypted){
-        const currentIv = iv || hexToUint8Array(frag.sn.toString(16).padStart(32, '0'));
-        const decrypted = await decryptFragment(encryptedBuffer, cryptoKey, currentIv);
-        decryptedBuffers.push(decrypted);
-      }else{
-        decryptedBuffers.push(new Uint8Array(encryptedBuffer));
+
+    // 构造任务列表，每个任务返回 {sn, data}
+    const taskList = selectedFrags.map((frag, taskIndex)=>{
+      return async ()=>{
+        progressDom.innerText = `📥 正在处理 ${taskIndex+1}/${total}，分片SN:${frag.sn}`;
+        const resp = await fetch(frag.url);
+        if(!resp.ok) throw new Error(`分片SN${frag.sn}下载失败：HTTP ${resp.status}`);
+        const buf = await resp.arrayBuffer();
+        let decBuf;
+        if(m3u8Data.encrypted){
+          const currentIv = ivBase || hexToUint8Array(frag.sn.toString(16).padStart(32, '0'));
+          decBuf = await decryptFragment(buf, cryptoKey, currentIv);
+        }else{
+          decBuf = new Uint8Array(buf);
+        }
+        return {sn: frag.sn, data: decBuf};
       }
-    }
+    })
+
+    // 并发池执行
+    const rawResult = await poolRunner(taskList, CONCURRENCY);
+    // 【重点】按SN排序，保证顺序正确！
+    rawResult.sort((a,b)=> a.sn - b.sn);
+    const finalBuffers = rawResult.map(item=>item.data);
+
     progressDom.innerText = `✅ 全部分片解密完成，正在合并导出`;
-    const finalBlob = new Blob(decryptedBuffers, {type:"video/mp4"});
-    downloadBlob(finalBlob, "video.mp");
+    const finalBlob = new Blob(finalBuffers, {type:"video/mp4"});
+    downloadBlob(finalBlob, "video.mp4");
     progressDom.innerText = `🎉 导出成功 video.mp4`;
   } catch (err) {
     progressDom.innerText = "❌ 下载解密失败："+ err.message;
